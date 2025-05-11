@@ -8,6 +8,11 @@ const signupUser = async (req, res) => {
   try {
     const { name, email, password } = req.body;
     
+    // Validate input
+    if (!name || !email || !password) {
+      return res.render('Signup', { error: 'Please provide all required fields' });
+    }
+    
     // Check if user already exists
     const userExists = await User.findOne({ email });
     
@@ -19,7 +24,8 @@ const signupUser = async (req, res) => {
     const user = await User.create({
       name,
       email,
-      password
+      password,
+      isActive: true
     });
     
     if (user) {
@@ -29,6 +35,7 @@ const signupUser = async (req, res) => {
       // Set token in cookie
       res.cookie('token', token, {
         httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
       });
       
@@ -37,8 +44,10 @@ const signupUser = async (req, res) => {
       return res.render('Signup', { error: 'Invalid user data' });
     }
   } catch (error) {
-    console.error(error);
-    return res.render('Signup', { error: 'An error occurred' });
+    console.error('Signup error:', error);
+    return res.render('Signup', { 
+      error: error.message || 'An error occurred during signup'
+    });
   }
 };
 
@@ -49,11 +58,21 @@ const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
     
+    // Validate input
+    if (!email || !password) {
+      return res.render('Login', { error: 'Please provide email and password' });
+    }
+    
     // Check if user exists
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email }).select('+password');
     
     if (!user) {
       return res.render('Login', { error: 'Invalid email or password' });
+    }
+    
+    // Check if user is active
+    if (!user.isActive) {
+      return res.render('Login', { error: 'Your account has been deactivated' });
     }
     
     // Check if password matches
@@ -63,20 +82,26 @@ const loginUser = async (req, res) => {
       return res.render('Login', { error: 'Invalid email or password' });
     }
     
+    // Update last login
+    await user.updateLastLogin();
+    
     // Generate token
     const token = generateToken(user._id);
     
     // Set token in cookie
     res.cookie('token', token, {
       httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
       maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
     });
     
     // Redirect to dashboard
     return res.redirect('/dashboard');
   } catch (error) {
-    console.error(error);
-    return res.render('Login', { error: 'An error occurred' });
+    console.error('Login error:', error);
+    return res.render('Login', { 
+      error: error.message || 'An error occurred during login'
+    });
   }
 };
 
@@ -88,16 +113,21 @@ const getDashboard = async (req, res) => {
     // req.user is set by the protect middleware
     const user = req.user;
     
+    if (!user.isActive) {
+      return res.redirect('/login');
+    }
+    
     // Render dashboard with user data
     return res.render('Dashboard', { 
       user: {
         name: user.name,
         email: user.email,
-        createdAt: user.createdAt
+        createdAt: user.createdAt,
+        lastLogin: user.lastLogin
       } 
     });
   } catch (error) {
-    console.error(error);
+    console.error('Dashboard error:', error);
     return res.redirect('/login');
   }
 };
@@ -106,12 +136,18 @@ const getDashboard = async (req, res) => {
 // @route   GET /api/logout
 // @access  Private
 const logoutUser = (req, res) => {
-  res.cookie('token', '', {
-    httpOnly: true,
-    expires: new Date(0)
-  });
-  
-  return res.redirect('/');
+  try {
+    res.cookie('token', '', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      expires: new Date(0)
+    });
+    
+    return res.redirect('/');
+  } catch (error) {
+    console.error('Logout error:', error);
+    return res.redirect('/');
+  }
 };
 
 module.exports = {

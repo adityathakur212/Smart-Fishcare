@@ -5,7 +5,9 @@ const UserSchema = new mongoose.Schema({
   name: {
     type: String,
     required: [true, 'Please provide a name'],
-    trim: true
+    trim: true,
+    minlength: [2, 'Name must be at least 2 characters long'],
+    maxlength: [50, 'Name cannot be more than 50 characters']
   },
   email: {
     type: String,
@@ -18,12 +20,23 @@ const UserSchema = new mongoose.Schema({
   password: {
     type: String,
     required: [true, 'Please provide a password'],
-    minlength: 6
+    minlength: [6, 'Password must be at least 6 characters long'],
+    select: false // Don't return password in queries by default
+  },
+  isActive: {
+    type: Boolean,
+    default: true
   },
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  lastLogin: {
+    type: Date,
+    default: null
   }
+}, {
+  timestamps: true // Adds createdAt and updatedAt fields automatically
 });
 
 // Hash the password before saving
@@ -43,7 +56,17 @@ UserSchema.pre('save', async function(next) {
 
 // Method to compare password
 UserSchema.methods.comparePassword = async function(candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password);
+  try {
+    return await bcrypt.compare(candidatePassword, this.password);
+  } catch (error) {
+    throw new Error('Error comparing passwords');
+  }
+};
+
+// Method to update last login
+UserSchema.methods.updateLastLogin = async function() {
+  this.lastLogin = new Date();
+  await this.save();
 };
 
 module.exports = mongoose.model('User', UserSchema); 

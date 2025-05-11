@@ -2,115 +2,104 @@ const express = require("express");
 const app = express();
 const path = require("path");
 const cookieParser = require('cookie-parser');
-const { connectDB, getConnectionStatus } = require('./config/db');
+const { connectDB } = require('./config/db');
 require('dotenv').config();
 
 // Middleware
 app.set("view engine", "ejs");
 app.use(express.json());
-app.use(express.urlencoded({extended: true}));
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "public")));
 
-// Sensor data storage
+// In-memory Sensor Data Storage
 let latestData = {
-  temperature: '24°C',
-  pH: '7.1',
-  waterLevel: '75%',
-  feedingAgo: '2h ago'
+  temperature: "24°C",
+  distance: "100",
+  waterLevel: "85%",
+  feedingAgo: "2h ago",
+  lastFeedingTime: null,
+  feedingStatus: "Idle"
 };
 
-// API routes for sensor data
+let feedingRequestTime = 0; // Seconds to be fetched by ESP32
+
+// ===== ✅ API to RECEIVE sensor data from ESP32 =====
 app.post('/api/data', (req, res) => {
-  latestData = req.body;
-  console.log('New sensor data:', latestData);
+  const { temperature, distance, feedingStatus } = req.body;
+
+  if (temperature) latestData.temperature = temperature;
+  if (distance) latestData.distance = distance;
+  if (feedingStatus) latestData.feedingStatus = feedingStatus;
+
+  console.log("📡 Received from ESP32 →", latestData);
   res.sendStatus(200);
 });
 
-app.get('/api/data', (req, res) => {
-  res.json(latestData);
+// ===== ✅ API to SEND feeding time to ESP32 =====
+app.get('/api/set-feeding-time', (req, res) => {
+  res.json({ feedingTime: feedingRequestTime });
+  feedingRequestTime = 0; // reset after sending
 });
 
-// Basic routes
-app.get("/", (req, res) => {
-  res.render("Home", { dbConnected: getConnectionStatus() });
+// ===== ✅ API to SET feeding time from dashboard =====
+app.post('/api/set-feeding-time', (req, res) => {
+  const { seconds } = req.body;
+
+  if (!seconds || seconds < 1 || seconds > 60) {
+    return res.status(400).json({ success: false, message: "Invalid time. 1–60 seconds allowed." });
+  }
+
+  feedingRequestTime = parseInt(seconds);
+  latestData.lastFeedingTime = new Date().toLocaleTimeString();
+  latestData.feedingAgo = "Just now";
+  latestData.feedingStatus = "Feeding";
+
+  console.log(`✅ Feeding triggered for ${seconds} seconds`);
+  res.json({
+    success: true,
+    message: `Feeding for ${seconds} seconds.`,
+    lastFeeding: latestData.lastFeedingTime
+  });
 });
 
-app.get("/login", (req, res) => {
-  res.render("Login", { dbConnected: getConnectionStatus() });
-});
+// ===== Basic Routes =====
+app.get("/", (req, res) => res.render("Landing"));
+app.get("/login", (req, res) => res.render("Login"));
+app.get("/signup", (req, res) => res.render("Signup"));
 
-app.get("/signup", (req, res) => {
-  res.render("Signup", { dbConnected: getConnectionStatus() });
-});
-
+// ===== Dashboard =====
 app.get("/dashboard", (req, res) => {
   const mockUser = {
     name: "Aditya Thakur",
     email: "akthakur1598@gmail.com",
     createdAt: new Date()
   };
+
   res.render("Dashboard", { user: mockUser, sensor: latestData });
 });
 
-// Initialize the server
+// ===== Start Server =====
 async function startServer() {
   try {
-    // Try to connect to MongoDB
     const dbConnected = await connectDB();
-    
-    // If MongoDB is connected, include database-dependent routes
+
     if (dbConnected) {
       const User = require('./models/User');
       const authRoutes = require('./routes/authRoutes');
-      
-      // Database-dependent routes
       app.use('/', authRoutes);
-      
-      // Delete route - depends on database
-      app.get("/delete/:id", async (req, res) => {
-        try {
-          const emailToDelete = req.params.id;
-          console.log(`Attempting to delete user with email: ${emailToDelete}`);
-          
-          const deletedUser = await User.findOneAndDelete({ email: emailToDelete });
-          
-          if (!deletedUser) {
-            console.log(`No user found with email: ${emailToDelete}`);
-            return res.status(404).render("Login", { error: "User not found" });
-          }
-          
-          console.log(`Successfully deleted user: ${deletedUser.email}`);
-          res.render("Login", { message: "Your account has been deleted successfully" });
-        } catch (error) {
-          console.error("Error deleting account:", error);
-          res.render("Login", { error: "An error occurred while deleting your account" });
-        }
-      });
     } else {
-      console.log("Running without database-dependent features");
-      
-      // Fallback routes for when database is not available
-      app.post('/api/signup', (req, res) => {
-        res.render('Signup', { error: 'Database connection is unavailable. Cannot register at this time.' });
-      });
-      
-      app.post('/api/login', (req, res) => {
-        res.render('Login', { error: 'Database connection is unavailable. Using demo mode.' });
-      });
+      console.log("⚠️ Running without database-dependent features.");
     }
-    
-    // Start the server
+
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running on port ${PORT}`);
-      console.log(`Database connected: ${getConnectionStatus()}`);
+      console.log(`🚀 Server running on http://localhost:${PORT}`);
     });
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('❌ Failed to start server:', error);
     process.exit(1);
   }
 }
 
-// Start the server
 startServer();
